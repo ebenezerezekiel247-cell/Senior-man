@@ -1,0 +1,9 @@
+{
+  "name": "Senior Man",
+  "description": "Smart Nigerian assistant wey speak Pidgin and sabi solve your problems from pictures.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": []
+}

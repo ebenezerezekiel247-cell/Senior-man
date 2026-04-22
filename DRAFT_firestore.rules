@@ -1,0 +1,90 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Validations
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'updatedAt']) &&
+             data.keys().size() <= 5 &&
+             data.uid == request.auth.uid &&
+             data.email is string && data.email.size() <= 256 &&
+             data.updatedAt == request.time.toMillis();
+    }
+
+    function isValidSession(data) {
+      return data.keys().hasAll(['id', 'userId', 'title', 'createdAt', 'updatedAt']) &&
+             data.keys().size() == 5 &&
+             data.userId == request.auth.uid &&
+             data.id is string && data.id.size() <= 128 &&
+             data.title is string && data.title.size() <= 100 &&
+             data.createdAt is number &&
+             data.updatedAt is number;
+    }
+
+    function isValidMessage(data) {
+      return data.keys().hasAll(['id', 'role', 'text', 'timestamp']) &&
+             data.keys().size() <= 5 &&
+             data.role in ['user', 'ai'] &&
+             data.text is string && data.text.size() <= 10000 &&
+             data.timestamp is number;
+    }
+
+    // User Profile
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUser(incoming());
+      allow update: if isOwner(userId) && isValidUser(incoming()) && 
+                    incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'updatedAt']);
+    }
+
+    // Sessions
+    match /users/{userId}/sessions/{sessionId} {
+      allow list: if isOwner(userId);
+      allow get: if isOwner(userId) && isValidId(sessionId);
+      allow create: if isOwner(userId) && isValidId(sessionId) && isValidSession(incoming());
+      allow update: if isOwner(userId) && isValidId(sessionId) && isValidSession(incoming()) &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['title', 'updatedAt']) &&
+                    incoming().createdAt == existing().createdAt;
+      allow delete: if isOwner(userId) && isValidId(sessionId);
+
+      // Messages
+      match /messages/{messageId} {
+        allow list: if isOwner(userId);
+        allow get: if isOwner(userId) && isValidId(messageId);
+        allow create: if isOwner(userId) && isValidId(messageId) && isValidMessage(incoming()) && 
+                       exists(/databases/$(database)/documents/users/$(userId)/sessions/$(sessionId));
+        // Messages are usually immutable in a chat, so update is restrictive if allowed at all.
+        // We'll allow AI to "stream" updates to the same message if we don't use server-side.
+        // Since we call Gemini from frontend, the user's uid will be used to write AI messages.
+        allow update: if isOwner(userId) && isValidId(messageId) && isValidMessage(incoming()) &&
+                      incoming().timestamp == existing().timestamp;
+        allow delete: if isOwner(userId) && isValidId(messageId);
+      }
+    }
+  }
+}
